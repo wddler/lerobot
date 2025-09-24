@@ -1,0 +1,17 @@
+[Unit]
+Description=SO ARM Teleoperation Demo
+After=network.target
+
+[Service]
+User=robohouse
+ExecStart=/bin/bash /home/robohouse/teleop_demo.sh
+Restart=always
+WorkingDirectory=/home/robohouse
+Environment="PATH=/home/robohouse/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="HOME=/home/robohouse"
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
