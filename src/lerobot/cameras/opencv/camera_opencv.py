@@ -160,7 +160,8 @@ class OpenCVCamera(Camera):
         cv2.setNumThreads(1)
 
         self.videocapture = cv2.VideoCapture(self.index_or_path, self.backend)
-
+        self.videocapture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        
         if not self.videocapture.isOpened():
             self.videocapture.release()
             self.videocapture = None

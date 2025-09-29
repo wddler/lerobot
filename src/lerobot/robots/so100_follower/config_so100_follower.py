@@ -40,6 +40,11 @@ class SO100FollowerConfig(RobotConfig):
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = False
 
+    urdf_path: str = "/home/denis/projects/SO-ARM100/Simulation/SO101/so101_new_calib.urdf"
+
+    # End-effector frame name in the URDF
+    target_frame_name: str = "gripper_frame_link"
+
 
 @RobotConfig.register_subclass("so100_follower_end_effector")
 @dataclass
@@ -49,7 +54,8 @@ class SO100FollowerEndEffectorConfig(SO100FollowerConfig):
     # Path to URDF file for kinematics
     # NOTE: It is highly recommended to use the urdf in the SO-ARM100 repo:
     # https://github.com/TheRobotStudio/SO-ARM100/blob/main/Simulation/SO101/so101_new_calib.urdf
-    urdf_path: str | None = None
+    # urdf_path: str | None = None
+    urdf_path: str = "/home/denis/projects/SO-ARM100/Simulation/SO101/so101_new_calib.urdf"
 
     # End-effector frame name in the URDF
     target_frame_name: str = "gripper_frame_link"

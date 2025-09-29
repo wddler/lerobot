@@ -776,6 +776,9 @@ class LeRobotDataset(torch.utils.data.Dataset):
         for name in frame:
             if isinstance(frame[name], torch.Tensor):
                 frame[name] = frame[name].numpy()
+        
+        # frame['observation.images.top'] = frame['observation.images.top'].transpose(1,2,0)
+        # frame['observation.images.wrist'] = frame['observation.images.wrist'].transpose(1,2,0)
 
         validate_frame(frame, self.features)
 
