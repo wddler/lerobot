@@ -1,0 +1,117 @@
+python -m lerobot.teleoperate \
+    --robot.type=so100_follower \
+    --robot.port=/dev/ttyACM1 \
+    --robot.id=follower_left \
+    --robot.cameras="{ top: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}}" \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM0 \
+    --teleop.id=leader_left \
+    --display_data=true
+
+python -m lerobot.teleoperate \
+    --robot.type=so100_follower \
+    --robot.port=/dev/ttyACM1 \
+    --robot.id=follower_left \
+    --robot.cameras="{wrist: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}}" \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM0 \
+    --teleop.id=leader_left \
+    --display_data=true
+
+python -m lerobot.teleoperate \
+    --robot.type=so100_follower \
+    --robot.port=/dev/ttyACM1 \
+    --robot.id=follower_left \
+    --robot.cameras="{ top: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM0 \
+    --teleop.id=leader_left \
+    --display_data=true
+
+python -m lerobot.teleoperate \
+    --robot.type=so100_follower \
+    --robot.port=/dev/ttyACM1 \
+    --robot.id=follower_left \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM0 \
+    --teleop.id=leader_left \
+    --display_data=true
+
+lerobot-calibrate \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/ttyACM0 \
+    --teleop.id=leader_left
+
+lerobot-calibrate \
+    --robot.type=so100_follower \
+    --robot.port=/dev/ttyACM1 \
+    --robot.id=follower_left
+
+  
+
+self.videocapture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+
+python -m lerobot.record  \
+  --robot.type=so100_follower \
+  --robot.port=/dev/ttyACM1 \
+  --robot.cameras="{ top: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+  --robot.id=follower_left \
+  --display_data=true \
+  --dataset.repo_id=dzatyagov/eval_bolt_handover2_act \
+  --dataset.single_task="pick up the bolt from the red bin, wait for a hand to grab the bolt and then open the gripper" \
+  --policy.path=outputs/train/act_bolt_handover2/checkpoints/last/pretrained_model/ \
+  --dataset.push_to_hub=False \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM0 \
+  --teleop.id=leader_left \
+  --dataset.episode_time=120 \
+  --resume=true
+
+python -m lerobot.record  \
+  --robot.type=so100_follower \
+  --robot.port=/dev/ttyACM1 \
+  --robot.cameras="{ top: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+  --robot.id=follower_left \
+  --display_data=true \
+  --dataset.repo_id=dzatyagov/eval_bolt_handover2_diffusion-fast \
+  --dataset.single_task="pick up the bolt from the red bin, wait for a hand to grab the bolt and then open the gripper" \
+  --policy.path=outputs/train/diffusion_bolt_handover2/checkpoints/last/pretrained_model/ \
+  --dataset.push_to_hub=False \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM0 \
+  --teleop.id=leader_left \
+  --dataset.episode_time=120 \
+  --policy.device=cuda \
+  --resume=true
+
+python -m lerobot.record  \
+  --robot.type=so100_follower \
+  --robot.port=/dev/ttyACM1 \
+  --robot.cameras="{ top: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+  --robot.id=follower_left \
+  --display_data=true \
+  --dataset.repo_id=dzatyagov/eval_bolt_handover2_smolvla \
+  --dataset.single_task="pick up the bolt from the red bin, wait for a hand to grab the bolt and then open the gripper" \
+  --policy.path=outputs/train/smolvla_bolt_handover2/checkpoints/last/pretrained_model/ \
+  --dataset.push_to_hub=False \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM0 \
+  --teleop.id=leader_left \
+  --dataset.episode_time=120 \
+  --resume=true
+
+python -m lerobot.record  \
+  --robot.type=so100_follower \
+  --robot.port=/dev/ttyACM1 \
+  --robot.cameras="{ top: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}}" \
+  --robot.id=follower_left \
+  --display_data=true \
+  --dataset.repo_id=dzatyagov/eval_bolt_handover2_pi0-demo \
+  --dataset.single_task="pick up the bolt from the red bin, wait for a hand to grab the bolt and then open the gripper\n" \
+  --policy.path=outputs/train/pi0_bolt_handover_policy/checkpoints/last/pretrained_model/ \
+  --dataset.push_to_hub=False \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/ttyACM0 \
+  --teleop.id=leader_left \
+  --dataset.episode_time=120 \
+  --resume=true
