@@ -1,12 +1,47 @@
 lerobot-find-port
 
 lerobot-teleoperate \
-    --robot.type=so100_follower \
-    --robot.port=/dev/ttyACM0 \
-    --robot.id=my_awesome_follower_arm \
-    --teleop.type=so100_leader \
-    --teleop.port=/dev/ttyACM1 \
-    --teleop.id=my_awesome_leader_arm \
-    --robot.cameras="{ top: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
-    --display_data=true
-    
+  --robot.type=so100_follower \
+  --robot.port=/dev/ttyACM0 \
+  --robot.id=my_awesome_follower_arm \
+  --teleop.type=so100_leader \
+  --teleop.port=/dev/ttyACM1 \
+  --teleop.id=my_awesome_leader_arm \
+  --robot.cameras="{ top: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+  --display_data=true
+
+lerobot-teleoperate \
+  --robot.type=so100_follower \
+  --robot.port=/dev/ttyACM0 \
+  --robot.id=my_awesome_follower_arm \
+  --teleop.type=so100_leader \
+  --teleop.port=/dev/ttyACM1 \
+  --teleop.id=my_awesome_leader_arm \
+  --display_data=true
+
+lerobot-teleoperate \
+  --robot.type=bi_so100_follower \
+  --robot.left_arm_port=/dev/ttyACM1 \
+  --robot.right_arm_port=/dev/ttyACM2 \
+  --robot.id=bimanual_follower \
+  --teleop.type=bi_so100_leader \
+  --teleop.left_arm_port=/dev/ttyACM0 \
+  --teleop.right_arm_port=/dev/ttyACM3 \
+  --teleop.id=bimanual_leader \
+  --display_data=true
+
+python -m lerobot.teleoperate \
+  --robot.type=bi_so100_follower \
+  --robot.left_arm_port=/dev/ttyACM3 \
+  --robot.right_arm_port=/dev/ttyACM1 \
+  --robot.id=bimanual_follower \
+  --robot.cameras='{
+    top: {"type": "opencv", "index_or_path": 0, "width": 800, "height": 600, "fps": 30},
+    bottom_cam: {"type": "opencv", "index_or_path": 1, "width": 800, "height": 600, "fps": 30},
+    side_cam: {"type": "opencv", "index_or_path": 2, "width": 800, "height": 600, "fps": 30},
+  }' \
+  --teleop.type=bi_so100_leader \
+  --teleop.left_arm_port=/dev/ttyACM0 \
+  --teleop.right_arm_port=/dev/ttyACM2 \
+  --teleop.id=bimanual_leader \
+  --display_data=true
