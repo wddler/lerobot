@@ -47,8 +47,8 @@
 - sections:
   - local: envhub
     title: Environments from the Hub
-  - local: il_sim
-    title: Imitation Learning in Sim
+  - local: envhub_leisaac
+    title: Control & Train Robots in Sim (LeIsaac)
   - local: libero
     title: Using Libero
   - local: metaworld
@@ -63,6 +63,8 @@
     title: Implement your own processor
   - local: processors_robots_teleop
     title: Processors for Robots and Teleoperators
+  - local: env_processor
+    title: Environment Processors
   title: "Robot Processors"
 - sections:
   - local: so101
@@ -77,6 +79,8 @@
     title: Hope Jr
   - local: reachy2
     title: Reachy 2
+  - local: unitree_g1
+    title: Unitree G1
   title: "Robots"
 - sections:
   - local: phone_teleop
