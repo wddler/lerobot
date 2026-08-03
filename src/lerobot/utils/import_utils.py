@@ -242,7 +242,8 @@ def register_third_party_plugins() -> None:
         dist_name = dist.metadata.get("Name")
         if not dist_name:
             continue
-        if dist_name.startswith(prefixes):
-            attempt_import(dist_name)
+        normalized_name = dist_name.replace("-", "_")
+        if normalized_name.startswith(prefixes):
+            attempt_import(normalized_name)
 
     logging.debug("Third-party plugin import summary: imported=%s failed=%s", imported, failed)
