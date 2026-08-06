@@ -27,6 +27,19 @@ from lerobot.utils.robot_utils import precise_sleep
 FPS = 30
 logger = logging.getLogger(__name__)
 
+# Length of the physical gripper in meters (along local Z-axis of the wrist flange)
+# Piper's standard gripper is approx 14.5 cm
+TOOL_OFFSET_Z = 0.145
+
+# Cartesian safety bounds [min, max] in meters relative to the robot base
+# applied to the TCP (gripper tip). Tabletop is at Z = 0.0, using 0.03 for 3cm clearance.
+EE_BOUNDS = {
+    "min": np.array([-0.6, -0.6, 0.03]),
+    "max": np.array([0.6, 0.6, 0.6]),
+}
+# Maximum allowed end-effector translation per step (in meters) to rate-limit tracking jumps
+MAX_EE_STEP_M = 0.05
+
 def main():
     logging.basicConfig(level=logging.INFO)
 
@@ -50,8 +63,9 @@ def main():
 
     # State variables for relative Cartesian mapping
     enabled_prev = False
-    x_init, y_init, z_init = 0.0, 0.0, 0.0
-    rot_init = Rotation.identity()
+    tcp_init_pos = np.zeros(3)
+    rot_flange_init = Rotation.identity()
+    last_pos = None
 
     # Gripper state variables
     gripper_pos = 0.0  # mm
@@ -97,17 +111,22 @@ def main():
                     continue
 
                 # Convert SDK micrometers to meters (divide by 10^6)
-                x_init = pose_msg.end_pose.X_axis * 1e-6
-                y_init = pose_msg.end_pose.Y_axis * 1e-6
-                z_init = pose_msg.end_pose.Z_axis * 1e-6
+                x_flange_init = pose_msg.end_pose.X_axis * 1e-6
+                y_flange_init = pose_msg.end_pose.Y_axis * 1e-6
+                z_flange_init = pose_msg.end_pose.Z_axis * 1e-6
 
                 # Convert SDK millidegrees to degrees (divide by 1000)
-                rpy_init = [
+                rpy_flange_init = [
                     pose_msg.end_pose.RX_axis / 1000.0,
                     pose_msg.end_pose.RY_axis / 1000.0,
                     pose_msg.end_pose.RZ_axis / 1000.0
                 ]
-                rot_init = Rotation.from_euler("xyz", rpy_init, degrees=True)
+                rot_flange_init = Rotation.from_euler("xyz", rpy_flange_init, degrees=True)
+
+                # Calculate initial Tool Center Point (TCP) position by offsetting along the local Z-axis
+                flange_init_pos = np.array([x_flange_init, y_flange_init, z_flange_init])
+                local_z_init = rot_flange_init.as_matrix()[:, 2]
+                tcp_init_pos = flange_init_pos + local_z_init * TOOL_OFFSET_Z
 
                 # Reset target gripper position to current gripper observation
                 gripper_pos = joint_obs.get("gripper.pos", 0.0)
@@ -121,10 +140,27 @@ def main():
                 dy = pos_cal[0]
                 dz = pos_cal[2]
 
-                # Accumulate the relative motion onto the starting pose
-                target_pos = np.array([x_init, y_init, z_init]) + np.array([dx, dy, dz])
-                target_rot = Rotation.from_matrix(rot_cal.as_matrix() @ rot_init.as_matrix())
+                # Accumulate the relative motion onto the starting TCP position
+                target_tcp_pos = tcp_init_pos + np.array([dx, dy, dz])
+                
+                # Apply tabletop and workspace bounds safety clipping directly to the TCP (gripper tip)
+                target_tcp_pos = np.clip(target_tcp_pos, EE_BOUNDS["min"], EE_BOUNDS["max"])
+
+                # Calculate target orientation
+                target_rot = Rotation.from_matrix(rot_cal.as_matrix() @ rot_flange_init.as_matrix())
                 target_rpy = target_rot.as_euler("xyz", degrees=True)
+
+                # Convert target TCP position back to required wrist flange coordinates for the SDK
+                local_z_target = target_rot.as_matrix()[:, 2]
+                target_flange_pos = target_tcp_pos - local_z_target * TOOL_OFFSET_Z
+
+                # Rate-limit jumps on the commanded flange position
+                if last_pos is not None:
+                    dpos = target_flange_pos - last_pos
+                    step_len = np.linalg.norm(dpos)
+                    if step_len > MAX_EE_STEP_M:
+                        target_flange_pos = last_pos + dpos * (MAX_EE_STEP_M / step_len)
+                last_pos = target_flange_pos
 
                 # Process gripper speed from button inputs (Button A = open/close, Button B = opposite)
                 a = float(inputs.get("reservedButtonA", 0.0))
@@ -134,9 +170,9 @@ def main():
 
                 # Scale coordinates/rotations for the SDK
                 # (X, Y, Z in 0.001 mm; RX, RY, RZ in 0.001 degrees)
-                x_sdk = int(round(target_pos[0] * 1e6))
-                y_sdk = int(round(target_pos[1] * 1e6))
-                z_sdk = int(round(target_pos[2] * 1e6))
+                x_sdk = int(round(target_flange_pos[0] * 1e6))
+                y_sdk = int(round(target_flange_pos[1] * 1e6))
+                z_sdk = int(round(target_flange_pos[2] * 1e6))
                 rx_sdk = int(round(target_rpy[0] * 1000))
                 ry_sdk = int(round(target_rpy[1] * 1000))
                 rz_sdk = int(round(target_rpy[2] * 1000))
@@ -150,6 +186,10 @@ def main():
                 # Command gripper (convert mm to 0.001 mm)
                 gripper_sdk = int(round(gripper_pos * 1000))
                 robot.piper.GripperCtrl(abs(gripper_sdk), robot_config.gripper_effort, 0x01, 0)
+
+            else:
+                # Reset tracking history when clutch is disengaged
+                last_pos = None
 
             enabled_prev = enabled
             precise_sleep(max(1.0 / FPS - (time.perf_counter() - t0), 0.0))
