@@ -47,7 +47,7 @@ def main():
     robot_config = PiperFollowerConfig(
         can_port="can0",  # Adjust to your physical CAN port interface
         use_mit_mode=False,
-        speed_rate=10,
+        speed_rate=50,
     )
     teleop_config = PhoneConfig(phone_os=PhoneOS.ANDROID)
 
@@ -67,8 +67,11 @@ def main():
     rot_flange_init = Rotation.identity()
     last_pos = None
 
+    # Read initial observations to get starting gripper position
+    joint_obs = robot.get_observation()
+
     # Gripper state variables
-    gripper_pos = 0.0  # mm
+    gripper_pos = joint_obs.get("gripper.pos", 0.0)  # mm
     gripper_speed_factor = 20.0
     dt = 1.0 / FPS
 
@@ -91,6 +94,17 @@ def main():
             pos_cal = phone_obs["phone.pos"]  # relative translation vector
             rot_cal = phone_obs["phone.rot"]  # relative rotation
             inputs = phone_obs["phone.raw_inputs"]
+
+            # Process gripper speed from button inputs (Button A = open/close, Button B = opposite)
+            # This runs at all times, so the gripper works even when the arm movement is locked (clutch disengaged)
+            a = float(inputs.get("reservedButtonA", 0.0))
+            b = float(inputs.get("reservedButtonB", 0.0))
+            gripper_vel = a - b
+            gripper_pos = np.clip(gripper_pos + gripper_vel * gripper_speed_factor * dt, 0.0, 70.0)
+
+            # Command gripper (convert mm to 0.001 mm)
+            gripper_sdk = int(round(gripper_pos * 1000))
+            robot.piper.GripperCtrl(abs(gripper_sdk), robot_config.gripper_effort, 0x01, 0)
 
             # Handle rising edge of the clutch trigger button (engagement)
             if enabled and not enabled_prev:
@@ -162,11 +176,7 @@ def main():
                         target_flange_pos = last_pos + dpos * (MAX_EE_STEP_M / step_len)
                 last_pos = target_flange_pos
 
-                # Process gripper speed from button inputs (Button A = open/close, Button B = opposite)
-                a = float(inputs.get("reservedButtonA", 0.0))
-                b = float(inputs.get("reservedButtonB", 0.0))
-                gripper_vel = a - b
-                gripper_pos = np.clip(gripper_pos + gripper_vel * gripper_speed_factor * dt, 0.0, 70.0)
+
 
                 # Scale coordinates/rotations for the SDK
                 # (X, Y, Z in 0.001 mm; RX, RY, RZ in 0.001 degrees)
@@ -183,9 +193,7 @@ def main():
                 # Command Cartesian coordinates
                 robot.piper.EndPoseCtrl(x_sdk, y_sdk, z_sdk, rx_sdk, ry_sdk, rz_sdk)
 
-                # Command gripper (convert mm to 0.001 mm)
-                gripper_sdk = int(round(gripper_pos * 1000))
-                robot.piper.GripperCtrl(abs(gripper_sdk), robot_config.gripper_effort, 0x01, 0)
+
 
             else:
                 # Reset tracking history when clutch is disengaged
