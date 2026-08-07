@@ -34,10 +34,15 @@ class MapSOLeaderToRobotAction(RobotActionProcessorStep):
     The SO leader has no dedicated Cartesian output, so this step runs forward kinematics on its
     joints to recover its end-effector pose, and reports the position and orientation delta since
     the pose latched at the last rising edge of `enabled`. The orientation delta is expressed in
-    the *reference pose's own local frame* (`R_ref.T @ R_curr`), so a follower can apply it as
-    `R_follower_ref @ delta` regardless of how the two arms are mounted relative to each other.
-    This also sidesteps the SO101 (5-DOF) vs. a 6-DOF follower joint-count mismatch, since only a
-    Cartesian delta is produced, not joint angles.
+    the *world/base frame* (`R_curr @ R_ref.T`), not the leader's own local frame: applying it as
+    `delta @ R_follower_ref` on a follower rotates the follower the same way in absolute space
+    (tilt the leader down, the follower tilts down), regardless of how each arm's own URDF happens
+    to define its end-effector-local axes. This assumes the leader and follower base frames are
+    themselves roughly aligned (both mounted the same way, e.g. side by side on the same table) --
+    if they're not, a body-frame delta would need an explicit calibration rotation between the two
+    conventions instead, which this step does not attempt. This also sidesteps the SO101 (5-DOF)
+    vs. a 6-DOF follower joint-count mismatch, since only a Cartesian delta is produced, not joint
+    angles.
 
     The `enabled` clutch signal is not derived from the leader arm itself (SO leaders have no
     dedicated clutch input); the caller must inject an `"enabled"` key into the action dict (e.g.
@@ -86,8 +91,8 @@ class MapSOLeaderToRobotAction(RobotActionProcessorStep):
                 self.reference_pos = pos_curr.copy()
                 self.reference_rot = rot_curr.copy()
             delta_pos = (pos_curr - self.reference_pos) * self.scale_factor
-            # Rotation delta since latch, expressed in the reference orientation's own local frame.
-            delta_rot = self.reference_rot.T @ rot_curr
+            # Rotation delta since latch, expressed in the world/base frame (see class docstring).
+            delta_rot = rot_curr @ self.reference_rot.T
             delta_rotvec = Rotation.from_matrix(delta_rot).as_rotvec()
         else:
             # Force a fresh latch next time the clutch is engaged.

@@ -22,9 +22,11 @@ position + orientation delta since the clutch was last engaged, scale the positi
 that delta straight into Piper's own onboard Cartesian controller (`EndPoseCtrl`) -- the same
 mechanism `examples/phone_to_piper` uses, just driven by the SO101 leader instead of a phone.
 
-The orientation delta is applied in Piper's own end-effector local frame (see
-`MapSOLeaderToRobotAction`), so rotating the SO101 wrist rotates Piper's wrist by the same
-relative amount regardless of how the two arms are mounted. The SO101's own gripper position
+The orientation delta is applied in the world/base frame (see `MapSOLeaderToRobotAction`), so
+tilting/rotating the SO101 leader in a given real-world direction rotates Piper's gripper the same
+way, regardless of how each arm's own URDF defines its end-effector-local axes. This assumes both
+arms are mounted the same way (e.g. side by side on the same table) -- if they're rotated relative
+to each other, the mapping will be off by that same rotation. The SO101's own gripper position
 (0-100, analog) is mirrored 1:1 onto Piper's gripper (0-70mm).
 
 Hold SPACE to engage the clutch (Piper tracks the SO101 leader's delta); release it and Piper
@@ -71,8 +73,9 @@ if PYNPUT_AVAILABLE:
             e,
         )
 
-# SO101 leader motion is amplified 2x onto Piper: 10cm of SO101 motion -> 20cm of Piper motion.
-SCALE_FACTOR = 2.0
+# Multiplier applied to the SO101 leader's Cartesian position delta before sending it to Piper,
+# e.g. 2.0 makes 10cm of SO101 motion move Piper by 20cm.
+SCALE_FACTOR = 1.0
 
 # The SO101 URDF+meshes bundled with the phone_to_piper example; reused here to avoid duplicating
 # the (multi-MB) mesh assets.
@@ -101,7 +104,7 @@ def main():
     robot_config = PiperFollowerConfig(
         can_port="can0",  # Adjust to your physical CAN port interface
         use_mit_mode=False,
-        speed_rate=50,
+        speed_rate=25,
     )
     leader_config = SO101LeaderConfig(port="/dev/ttyACM0")  # Adjust to your SO101 leader's serial port
 
@@ -198,6 +201,15 @@ def main():
                     pose_msg.end_pose.RZ_axis / 1000.0,
                 ]
                 rot_flange_init = Rotation.from_euler("xyz", rpy_flange_init, degrees=True)
+                print(f"Piper orientation at clutch-engage (RX, RY, RZ deg): {np.round(rpy_flange_init, 1)}")
+                if abs(abs(rpy_flange_init[1]) - 90.0) < 15.0:
+                    print(
+                        "  Warning: RY is close to +/-90deg -- the 'xyz' Euler decomposition used to "
+                        "talk to the Piper SDK is singular (gimbal lock) near there, which can make X/Y "
+                        "orientation changes scramble into large RX/RZ jumps instead of tracking smoothly. "
+                        "If X/Y orientation tracking looks broken, try re-engaging the clutch from a pose "
+                        "tilted noticeably away from straight-down."
+                    )
 
                 # Calculate initial Tool Center Point (TCP) position by offsetting along the local
                 # Z-axis
@@ -216,13 +228,16 @@ def main():
                 # tip)
                 target_tcp_pos = np.clip(target_tcp_pos, EE_BOUNDS["min"], EE_BOUNDS["max"])
 
-                # Apply the SO101 leader's rotation delta (since clutch-engage, in the leader's own
-                # local frame) on top of Piper's orientation at clutch-engage time, in Piper's own
-                # local frame -- see MapSOLeaderToRobotAction for why this frame convention.
+                # Apply the SO101 leader's rotation delta (since clutch-engage, expressed in the
+                # world/base frame -- see MapSOLeaderToRobotAction) on top of Piper's orientation at
+                # clutch-engage time. Pre-multiplying applies the delta in world frame: tilt the
+                # SO101 leader down and Piper tilts down too, regardless of either arm's own local
+                # end-effector axis convention. This assumes both arms are mounted the same way
+                # (e.g. side by side on the same table).
                 delta_rot = Rotation.from_rotvec(
                     [delta_action["target_wx"], delta_action["target_wy"], delta_action["target_wz"]]
                 )
-                target_rot = Rotation.from_matrix(rot_flange_init.as_matrix() @ delta_rot.as_matrix())
+                target_rot = Rotation.from_matrix(delta_rot.as_matrix() @ rot_flange_init.as_matrix())
                 target_rpy = target_rot.as_euler("xyz", degrees=True)
 
                 # Convert target TCP position back to required wrist flange coordinates for the
