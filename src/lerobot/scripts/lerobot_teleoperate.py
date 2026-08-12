@@ -116,11 +116,12 @@ from lerobot.teleoperators import (  # noqa: F401
     omx_leader,
     openarm_leader,
     openarm_mini,
+    phone,
     reachy2_teleoperator,
     rebot_102_leader,
     so_leader,
+    so_leader_ee,
     unitree_g1,
-    phone,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
