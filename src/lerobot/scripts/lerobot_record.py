@@ -148,6 +148,7 @@ from lerobot.teleoperators import (  # noqa: F401
     reachy2_teleoperator,
     rebot_102_leader,
     so_leader,
+    so_leader_ee,
     unitree_g1,
 )
 from lerobot.teleoperators.keyboard import KeyboardTeleop
@@ -188,6 +189,14 @@ class RecordConfig:
     play_sounds: bool = True
     # Resume recording on an existing dataset.
     resume: bool = False
+    # Record action[t] as the robot's own observation.state at t+1 instead of the teleoperator's
+    # processed action. Use this when the teleoperator's action schema doesn't match
+    # robot.action_features (e.g. a Cartesian-delta teleoperator like so_leader_ee driving a
+    # robot with onboard/black-box IK) -- the dataset's "action" feature is always built from
+    # robot.action_features, so leaving this False in that situation means recording will fail
+    # (the teleop's action keys won't match what the dataset schema expects). See
+    # record_loop()'s action_from_next_observation docstring for the exact semantics.
+    action_from_next_observation: bool = False
 
     def __post_init__(self):
         if self.teleop is None:
@@ -245,6 +254,16 @@ def record_loop(
     display_data: bool = False,
     display_mode: str = "rerun",
     display_compressed_images: bool = False,
+    # When True, record action[t] as the robot's own observation.state at t+1 instead of the
+    # teleop's processed action. Use this when the teleoperator's action isn't directly usable
+    # as a training label -- e.g. it's in a different space than observation.state, or relative
+    # to a reference the policy won't have at inference time (as with Cartesian-delta
+    # teleoperators like so_leader_ee). The dataset's "action" feature is always built from
+    # robot.action_features (see record()), so this only changes which *values* get written, to
+    # match that schema; the live control loop (teleop.get_action() -> robot.send_action()) is
+    # unaffected either way. The last frame of each episode is dropped (no next observation to
+    # pair it with).
+    action_from_next_observation: bool = False,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -278,6 +297,11 @@ def record_loop(
 
     no_action_count = 0
     timestamp = 0
+    # Holds the previous iteration's {**observation_frame, "task": ...}, waiting for *this*
+    # iteration's observation to complete it as that frame's action. Only used when
+    # action_from_next_observation=True; always local to one record_loop() call, so it can't
+    # leak a frame across episodes (each episode gets a fresh record_loop() call).
+    pending_frame: dict | None = None
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
@@ -291,6 +315,10 @@ def record_loop(
 
         # Applies a pipeline to the raw robot observation, default is IdentityProcessor
         obs_processed = robot_observation_processor(obs)
+
+        if dataset is not None and action_from_next_observation and pending_frame is not None:
+            action_frame = build_dataset_frame(dataset.features, obs_processed, prefix=ACTION)
+            dataset.add_frame({**pending_frame, **action_frame})
 
         if dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
@@ -333,9 +361,15 @@ def record_loop(
 
         # Write to dataset
         if dataset is not None:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
-            frame = {**observation_frame, **action_frame, "task": single_task}
-            dataset.add_frame(frame)
+            if action_from_next_observation:
+                # Completed above, once next iteration's observation is available; stash this
+                # iteration's observation to be completed then. If the loop ends (or exit_early
+                # fires) before that happens, this last frame is simply dropped.
+                pending_frame = {**observation_frame, "task": single_task}
+            else:
+                action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+                frame = {**observation_frame, **action_frame, "task": single_task}
+                dataset.add_frame(frame)
 
         if display_data:
             log_visualization_data(
@@ -484,6 +518,7 @@ def record(
                     display_data=cfg.display_data,
                     display_mode=cfg.display_mode,
                     display_compressed_images=display_compressed_images,
+                    action_from_next_observation=cfg.action_from_next_observation,
                 )
 
                 # Execute a few seconds without recording to give time to manually reset the environment
