@@ -90,8 +90,8 @@ TOOL_OFFSET_Z = 0.145
 # Cartesian safety bounds [min, max] in meters relative to the robot base, applied to the TCP
 # (gripper tip). Tabletop is at Z = 0.0, using 0.03 for 3cm clearance.
 EE_BOUNDS = {
-    "min": np.array([-0.6, -0.6, 0.03]),
-    "max": np.array([0.6, 0.6, 0.6]),
+    "min": np.array([-0.6, -0.3, 0.01]),
+    "max": np.array([0.6, 0.3, 0.6]),
 }
 # Maximum allowed end-effector translation per step (in meters) to rate-limit tracking jumps
 MAX_EE_STEP_M = 0.05
