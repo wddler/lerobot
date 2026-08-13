@@ -1,0 +1,29 @@
+fps = 30
+display_data = true
+
+
+[teleop]
+type = "so101_leader_ee"
+port = "/dev/ttyACM0"
+id = "my_so101_leader_ee"
+urdf_path = "examples/phone_to_piper/piper/so101_new_calib.urdf"
+scale_factor = 2.0
+
+[robot]
+type = "piper_follower"
+can_port = "can0"
+id = "my_piperx"
+
+[robot.cameras.wrist]
+type = "opencv"
+index_or_path = 0
+width = 640
+height = 480
+fps = 30
+
+[robot.cameras.top]
+type = "opencv"
+index_or_path = 2
+width = 640
+height = 480
+fps = 30
