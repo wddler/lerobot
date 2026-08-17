@@ -1,6 +1,6 @@
-fps = 30
 display_data = true
-
+display_mode = "rerun"
+action_from_next_observation = true   # writes joint-space action[t] = observation.state[t+1]
 
 [teleop]
 type = "so101_leader_ee"
@@ -30,4 +30,11 @@ width = 640
 height = 480
 fps = 30
 
-# action_from_next_observation = true
+[dataset]
+repo_id = "denis/piper-picking-test"
+single_task = "Pick up grey part and put it into the blue bin"
+fps = 30
+episode_time_s = 60
+reset_time_s = 30
+num_episodes = 50
+push_to_hub = false

@@ -1,0 +1,8 @@
+[robot]
+type = "piper_follower"
+can_port = "can0"
+id = "my_piperx"
+
+[dataset]
+repo_id = "<namespace/dataset_name>"
+episode = 0

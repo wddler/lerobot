@@ -1,0 +1,26 @@
+fps = 30
+task = "Test pick and place"
+display_data = true
+display_mode = "rerun"
+
+[robot]
+type = "piper_follower"
+can_port = "can0"
+id = "my_piperx"
+ee_bounds_min = [-0.6, -0.3, 0.01]
+ee_bounds_max = [0.6, 0.4, 0.6]
+max_relative_target = 5.0   # degrees per step
+
+[robot.cameras.wrist]
+type = "opencv"
+index_or_path = 0
+width = 640
+height = 480
+fps = 30
+
+[robot.cameras.top]
+type = "opencv"
+index_or_path = 2
+width = 640
+height = 480
+fps = 30

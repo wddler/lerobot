@@ -1,0 +1,22 @@
+output_dir = "outputs/train/piperx_act_test"
+job_name = "piperx_act_test"
+# seed = 1000
+# num_workers = 4
+# batch_size = 8
+steps = 100000
+# log_freq = 200
+save_freq = 20000
+save_checkpoint = true
+
+[dataset]
+repo_id = "<namespace/dataset_name>"   # same stamped name as record/replay/viz
+
+[policy]
+type = "act"
+device = "cuda"
+push_to_hub = false
+# chunk_size = 100
+# n_action_steps = 100
+
+[wandb]
+enable = false
