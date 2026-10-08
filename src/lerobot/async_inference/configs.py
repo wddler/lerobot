@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import torch
 
 from lerobot.robots.config import RobotConfig
+from lerobot.teleoperators.config import TeleoperatorConfig
 
 from .constants import (
     DEFAULT_FPS,
@@ -100,6 +101,38 @@ class PolicyServerConfig:
 
 
 @dataclass
+class DAggerClientKeys:
+    """Keyboard bindings for the client's DAgger mode.
+
+    SPACE is deliberately not a default: ``so*_leader_ee`` teleoperators use it as their clutch.
+    """
+
+    pause_resume: str = "p"  # AUTONOMOUS <-> PAUSED
+    correction: str = "tab"  # PAUSED <-> CORRECTING
+    next_episode: str = "enter"  # save the current episode and start a new one (record_autonomous only)
+
+
+@dataclass
+class DAggerClientConfig:
+    """Human-in-the-loop (DAgger) mode for `RobotClient`: take over from the remote policy with a teleop.
+
+    Phases: AUTONOMOUS (remote policy drives) -> PAUSED (robot holds, nothing recorded, action queue
+    flushed) -> CORRECTING (teleop drives, recorded with ``intervention=True``) -> PAUSED -> AUTONOMOUS.
+    ``action`` labels are always the next observation's state (as with ``action_from_next_observation``
+    in lerobot-record), so autonomous and teleop frames share one label space.
+    """
+
+    enabled: bool = False
+    dataset_repo_id: str = ""  # blank -> local/hil_<checkpoint>_<timestamp>
+    dataset_root: str = ""  # blank -> default LeRobot cache
+    push_to_hub: bool = False
+    # True: record whole episodes (autonomous + corrections, intervention tagged), delimited by
+    # `keys.next_episode`. False: record only correction windows, one episode per correction.
+    record_autonomous: bool = True
+    keys: DAggerClientKeys = field(default_factory=DAggerClientKeys)
+
+
+@dataclass
 class RobotClientConfig:
     """Configuration for RobotClient.
 
@@ -148,6 +181,10 @@ class RobotClientConfig:
         default=False, metadata={"help": "Visualize the action queue size"}
     )
 
+    # Optional human-in-the-loop mode (requires `teleop`); off by default
+    teleop: TeleoperatorConfig | None = None
+    dagger: DAggerClientConfig = field(default_factory=DAggerClientConfig)
+
     @property
     def environment_dt(self) -> float:
         """Environment time step, in seconds"""
@@ -178,6 +215,9 @@ class RobotClientConfig:
 
         if self.actions_per_chunk <= 0:
             raise ValueError(f"actions_per_chunk must be positive, got {self.actions_per_chunk}")
+
+        if self.dagger.enabled and self.teleop is None:
+            raise ValueError("dagger.enabled requires a [teleop] section")
 
         self.aggregate_fn = get_aggregate_function(self.aggregate_fn_name)
 
