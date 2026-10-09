@@ -107,9 +107,10 @@ class DAggerClientKeys:
     SPACE is deliberately not a default: ``so*_leader_ee`` teleoperators use it as their clutch.
     """
 
-    pause_resume: str = "p"  # AUTONOMOUS <-> PAUSED
+    pause_resume: str = "right"  # AUTONOMOUS <-> PAUSED (a special key: character keys are unreliable under pynput with several layouts)
     correction: str = "tab"  # PAUSED <-> CORRECTING
     next_episode: str = "enter"  # save the current episode and start a new one (record_autonomous only)
+    discard_episode: str = "backspace"  # throw away the current episode without saving it
 
 
 @dataclass

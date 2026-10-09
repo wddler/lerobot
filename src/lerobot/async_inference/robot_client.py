@@ -31,20 +31,27 @@ python src/lerobot/async_inference/robot_client.py \
     --aggregate_fn_name=weighted_average \
     --debug_visualize_queue_size=True
 ```
+
+Human-in-the-loop (DAgger) mode: add a `[teleop]` section and `dagger.enabled = true` to the config
+(see `src/lerobot/configs/dagger_pi05_piperx.toml`). Controls (printed at startup): `right` (arrow) pause/resume the
+remote policy, `tab` start/stop a correction with the teleoperator, `enter` save the episode, ESC quit.
 """
 
 import logging
 import pickle  # nosec
+import re
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from queue import Queue
 from typing import Any
 
 import draccus
 import grpc
+import numpy as np
 import torch
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
@@ -58,12 +65,20 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     so_follower,
 )
+from lerobot.rollout.strategies.dagger import DAggerEvents, DAggerPhase
+from lerobot.teleoperators import (  # noqa: F401
+    make_teleoperator_from_config,
+    so_leader_ee,
+)
 from lerobot.transport import (
     services_pb2,  # type: ignore
     services_pb2_grpc,  # type: ignore
 )
 from lerobot.transport.utils import grpc_channel_options, send_bytes_in_chunks
+from lerobot.utils.constants import ACTION, OBS_STR
+from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts, hw_to_dataset_features
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.keyboard_input import create_key_listener
 
 from .configs import RobotClientConfig
 from .helpers import (
@@ -78,6 +93,87 @@ from .helpers import (
     map_robot_keys_to_lerobot_features,
     visualize_action_queue_size,
 )
+
+
+class _DAggerRecorder:
+    """Writes DAgger frames to a LeRobotDataset, labelling ``action[t]`` with ``observation.state[t+1]``.
+
+    A frame is held back until the next observation arrives and supplies its label (same scheme as
+    ``action_from_next_observation`` in lerobot-record), so any discontinuity (pause, clutch release,
+    episode end) must call :meth:`drop_pending`: the held frame has no valid successor and is discarded.
+    """
+
+    def __init__(self, robot: Robot, fps: int, repo_id: str, root: str, logger):
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        self._logger = logger
+        features = combine_feature_dicts(
+            hw_to_dataset_features(robot.observation_features, OBS_STR, use_video=True),
+            hw_to_dataset_features(robot.action_features, ACTION, use_video=True),
+        )
+        features["intervention"] = {"dtype": "bool", "shape": (1,), "names": None}
+        n_cams = len(getattr(robot, "cameras", {}) or {})
+        self.dataset = LeRobotDataset.create(
+            repo_id,
+            fps,
+            features=features,
+            root=root or None,
+            robot_type=robot.name,
+            use_videos=True,
+            image_writer_processes=0,
+            image_writer_threads=4 * max(n_cams, 1),
+        )
+        self._pending: dict | None = None
+        self._frames = 0
+        self._logger.info(f"[dagger] writing to {self.dataset.root} (repo_id={repo_id})")
+
+    def observe(self, raw_observation: RawObservation, task: str, intervention: bool, keep: bool = True):
+        """Complete the held frame with this observation's state, then hold this one (if ``keep``)."""
+        features = self.dataset.features
+        if self._pending is not None:
+            self.dataset.add_frame(
+                {**self._pending, **build_dataset_frame(features, raw_observation, ACTION)}
+            )
+            self._frames += 1
+            self._pending = None
+        if keep:
+            self._pending = {
+                **build_dataset_frame(features, raw_observation, OBS_STR),
+                "task": task,
+                "intervention": np.array([intervention], dtype=bool),
+            }
+
+    def drop_pending(self) -> None:
+        self._pending = None
+
+    def discard_episode(self) -> None:
+        self._pending = None
+        if self._frames > 0:
+            self.dataset.clear_episode_buffer()
+            self._logger.info(f"[dagger] discarded episode with {self._frames} frames")
+        self._frames = 0
+
+    def save_episode(self) -> None:
+        self._pending = None
+        if self._frames > 0:
+            self.dataset.save_episode()
+            self._logger.info(f"[dagger] saved episode with {self._frames} frames")
+        self._frames = 0
+
+    def close(self, push_to_hub: bool) -> None:
+        self.save_episode()
+        try:
+            self.dataset.finalize()
+            if push_to_hub:
+                self.dataset.push_to_hub()
+        except Exception as e:  # noqa: BLE001
+            self._logger.warning(f"[dagger] finalize/push failed: {e}")
+
+
+def _auto_dagger_repo_id(pretrained_path: str) -> str:
+    parts = [p for p in Path(str(pretrained_path)).parts if p not in ("/", "pretrained_model", "merged")]
+    tag = re.sub(r"[^0-9A-Za-z_.-]+", "_", "_".join(parts[-2:])).strip("_") or "policy"
+    return f"local/hil_{tag}_{time.strftime('%Y%m%d_%H%M%S')}"
 
 
 class RobotClient:
@@ -136,6 +232,17 @@ class RobotClient:
         self.must_go = threading.Event()
         self.must_go.set()  # Initially set - observations qualify for direct processing
 
+        # Human-in-the-loop (DAgger) mode; all None / unused unless config.dagger.enabled
+        self.dagger_events: DAggerEvents | None = None
+        self.dagger_recorder: _DAggerRecorder | None = None
+        self.teleop = None
+        self._key_listener = None
+        self._next_episode_requested = threading.Event()
+        self._discard_episode_requested = threading.Event()
+        self._correction_first_tick = False
+        if config.dagger.enabled:
+            self._setup_dagger()
+
     @property
     def running(self):
         return not self.shutdown_event.is_set()
@@ -174,11 +281,142 @@ class RobotClient:
         """Stop the robot client"""
         self.shutdown_event.set()
 
+        self._teardown_dagger()
         self.robot.disconnect()
         self.logger.debug("Robot disconnected")
 
         self.channel.close()
         self.logger.debug("Client stopped, channel closed")
+
+    # ------------------------------------------------------------------
+    # Human-in-the-loop (DAgger) mode
+    # ------------------------------------------------------------------
+
+    def _setup_dagger(self) -> None:
+        cfg = self.config.dagger
+        self.teleop = make_teleoperator_from_config(self.config.teleop)
+        self.teleop.connect()
+
+        repo_id = cfg.dataset_repo_id or _auto_dagger_repo_id(self.config.pretrained_name_or_path)
+        self.dagger_recorder = _DAggerRecorder(
+            self.robot, self.config.fps, repo_id, cfg.dataset_root, self.logger
+        )
+        self.dagger_events = DAggerEvents()
+
+        keys = cfg.keys
+        key_to_event = {keys.pause_resume: "pause_resume", keys.correction: "correction"}
+
+        def dispatch(name: str) -> None:
+            if name == "esc":
+                self.logger.info("ESC pressed, stopping")
+                self.shutdown_event.set()
+            elif name in key_to_event:
+                phase = self.dagger_events.phase
+                self.dagger_events.request_transition(key_to_event[name])
+                if self.dagger_events._pending_transition != key_to_event[name]:
+                    self.logger.warning(f"Key '{name}' ignored: not valid while {phase.value}")
+                else:
+                    self.logger.info(f"Key '{name}' -> {key_to_event[name]} (phase: {phase.value})")
+            elif name == keys.next_episode:
+                self.logger.info(f"Key '{name}' -> save episode requested")
+                self._next_episode_requested.set()
+            elif name == keys.discard_episode:
+                self.logger.info(f"Key '{name}' -> discard episode requested")
+                self._discard_episode_requested.set()
+            else:
+                self.logger.debug(f"Key {name!r} is not bound to anything")
+
+        self._key_listener = create_key_listener(
+            dispatch,
+            controls_help=(
+                f"pause/resume='{keys.pause_resume}', correction='{keys.correction}', "
+                f"save episode='{keys.next_episode}', discard episode='{keys.discard_episode}', ESC=stop"
+            ),
+        )
+        if self._key_listener is None:
+            raise RuntimeError("DAgger mode needs a keyboard backend (no usable pynput/TTY listener found)")
+
+    def _teardown_dagger(self) -> None:
+        if self._key_listener is not None:
+            self._key_listener.stop()
+            self._key_listener = None
+        if self.dagger_recorder is not None:
+            self.dagger_recorder.close(self.config.dagger.push_to_hub)
+            self.dagger_recorder = None
+        if self.teleop is not None:
+            self.teleop.disconnect()
+            self.teleop = None
+
+    @property
+    def _policy_driving(self) -> bool:
+        """True unless a DAgger session has paused the policy or handed control to the teleop."""
+        return self.dagger_events is None or self.dagger_events.phase == DAggerPhase.AUTONOMOUS
+
+    def _flush_action_queue(self) -> None:
+        with self.action_queue_lock:
+            self.action_queue = Queue()
+
+    def _on_dagger_transition(self, old: DAggerPhase, new: DAggerPhase) -> None:
+        self.logger.info(f"DAgger phase: {old.value} -> {new.value}")
+        # A held frame can't be labelled across a phase change.
+        self.dagger_recorder.drop_pending()
+
+        if new == DAggerPhase.PAUSED and old == DAggerPhase.AUTONOMOUS:
+            # Robot holds its last commanded pose; stale actions and in-flight chunks must not leak out.
+            self._flush_action_queue()
+        elif new == DAggerPhase.CORRECTING:
+            # The first teleop action goes out with the clutch forced open so the follower re-latches its
+            # Cartesian reference from wherever it currently is, rather than a stale one.
+            self._correction_first_tick = True
+        elif old == DAggerPhase.CORRECTING and not self.config.dagger.record_autonomous:
+            self.dagger_recorder.save_episode()
+        elif new == DAggerPhase.AUTONOMOUS:
+            self._flush_action_queue()
+            self.must_go.set()  # make the server infer from the new state even if it looks "similar"
+
+    def _dagger_handle_inputs(self) -> None:
+        transition = self.dagger_events.consume_transition()
+        if transition is not None:
+            self._on_dagger_transition(*transition)
+
+        if self.dagger_events.phase != DAggerPhase.CORRECTING:
+            if self._next_episode_requested.is_set():
+                self._next_episode_requested.clear()
+                if self.config.dagger.record_autonomous:
+                    self.dagger_recorder.save_episode()
+            if self._discard_episode_requested.is_set():
+                self._discard_episode_requested.clear()
+                self.dagger_recorder.discard_episode()
+
+    def _dagger_tick(self, task: str, verbose: bool = False) -> None:
+        self._dagger_handle_inputs()
+        phase = self.dagger_events.phase
+
+        if phase == DAggerPhase.AUTONOMOUS:
+            record = self.config.dagger.record_autonomous
+            raw_observation = self.robot.get_observation() if record else None
+            if self.actions_available():
+                self.control_loop_action(verbose)
+            if self._ready_to_send_observation():
+                self.control_loop_observation(task, verbose, raw_observation=raw_observation)
+            if record and raw_observation is not None:
+                self.dagger_recorder.observe(raw_observation, task, intervention=False)
+
+        elif phase == DAggerPhase.CORRECTING:
+            raw_observation = self.robot.get_observation()
+            teleop_action = self.teleop.get_action()
+            if self._correction_first_tick:
+                self._correction_first_tick = False
+                if "enabled" in teleop_action:
+                    teleop_action["enabled"] = False
+            # Skip frames while the clutch is open (robot idle), but still let this observation label
+            # the previous frame.
+            self.dagger_recorder.observe(
+                raw_observation, task, intervention=True, keep=bool(teleop_action.get("enabled", True))
+            )
+            self.robot.send_action(teleop_action)
+
+        # PAUSED: robot holds position, nothing is sent or recorded.
 
     def send_observation(
         self,
@@ -280,6 +518,9 @@ class RobotClient:
                     continue  # received `Empty` from server, wait for next call
 
                 receive_time = time.time()
+
+                if not self._policy_driving:
+                    continue  # paused / correcting: drop chunks computed from pre-handover observations
 
                 # Deserialize bytes back into list[TimedAction]
                 deserialize_start = time.perf_counter()
@@ -405,12 +646,15 @@ class RobotClient:
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self._chunk_size_threshold
 
-    def control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
+    def control_loop_observation(
+        self, task: str, verbose: bool = False, raw_observation: RawObservation | None = None
+    ) -> RawObservation:
         try:
             # Get serialized observation bytes from the function
             start_time = time.perf_counter()
 
-            raw_observation: RawObservation = self.robot.get_observation()
+            if raw_observation is None:
+                raw_observation = self.robot.get_observation()
             raw_observation["task"] = task
 
             with self.latest_action_lock:
@@ -466,13 +710,16 @@ class RobotClient:
 
         while self.running:
             control_loop_start = time.perf_counter()
-            """Control loop: (1) Performing actions, when available"""
-            if self.actions_available():
-                _performed_action = self.control_loop_action(verbose)
+            if self.dagger_events is not None:
+                self._dagger_tick(task, verbose)
+            else:
+                """Control loop: (1) Performing actions, when available"""
+                if self.actions_available():
+                    _performed_action = self.control_loop_action(verbose)
 
-            """Control loop: (2) Streaming observations to the remote policy server"""
-            if self._ready_to_send_observation():
-                _captured_observation = self.control_loop_observation(task, verbose)
+                """Control loop: (2) Streaming observations to the remote policy server"""
+                if self._ready_to_send_observation():
+                    _captured_observation = self.control_loop_observation(task, verbose)
 
             self.logger.debug(f"Control loop (ms): {(time.perf_counter() - control_loop_start) * 1000:.2f}")
             # Dynamically adjust sleep time to maintain the desired control frequency

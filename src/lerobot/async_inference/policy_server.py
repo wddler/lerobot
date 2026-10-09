@@ -36,6 +36,7 @@ from typing import Any
 
 import draccus
 import grpc
+import numpy as np
 import torch
 
 from lerobot.lerobot_types import PolicyAction
@@ -46,6 +47,7 @@ from lerobot.transport import (
     services_pb2_grpc,  # type: ignore
 )
 from lerobot.transport.utils import receive_bytes_in_chunks
+from lerobot.utils.constants import OBS_IMAGES
 
 from .configs import PolicyServerConfig
 from .constants import SUPPORTED_POLICIES
@@ -87,6 +89,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.policy = None
         self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
+        # (policy_type, path, device, rename_map) of the loaded policy; lets a reconnecting client skip the reload
+        self._loaded_key: tuple | None = None
 
     @property
     def running(self):
@@ -146,6 +150,20 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
 
+        load_key = (
+            policy_specs.policy_type,
+            policy_specs.pretrained_name_or_path,
+            policy_specs.device,
+            tuple(sorted(policy_specs.rename_map.items())),
+        )
+        if self.policy is not None and load_key == self._loaded_key:
+            # Same checkpoint as the previous client: reuse the weights already on the GPU. Restart the server
+            # to pick up changes made to the checkpoint on disk.
+            self.logger.info("Policy already loaded for this checkpoint; skipping reload and warmup")
+            if hasattr(self.policy, "reset"):
+                self.policy.reset()
+            return services_pb2.Empty()
+
         policy_class = get_policy_class(self.policy_type)
 
         start = time.perf_counter()
@@ -168,7 +186,31 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         self.logger.info(f"Time taken to put policy on {self.device}: {end - start:.4f} seconds")
 
+        self._warmup()
+        self._loaded_key = load_key
+
         return services_pb2.Empty()
+
+    def _warmup(self) -> None:
+        """Run one dummy inference so CUDA init / lazy kernel loading doesn't hit the first real observation."""
+        try:
+            raw_observation = {"task": "warmup"}
+            for key, ft in self.lerobot_features.items():
+                if key.startswith(OBS_IMAGES):
+                    raw_observation[key.removeprefix(f"{OBS_IMAGES}.")] = np.zeros(
+                        ft["shape"], dtype=np.uint8
+                    )
+                else:
+                    raw_observation.update(dict.fromkeys(ft["names"], 0.0))
+
+            start = time.perf_counter()
+            observation = raw_observation_to_observation(
+                raw_observation, self.lerobot_features, self.policy_image_features
+            )
+            self._get_action_chunk(self.preprocessor(observation))
+            self.logger.info(f"Warmup inference took {time.perf_counter() - start:.2f}s")
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"Warmup inference failed (continuing without it): {e}")
 
     def SendObservations(self, request_iterator, context):  # noqa: N802
         """Receive observations from the robot client"""
