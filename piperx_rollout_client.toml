@@ -1,0 +1,49 @@
+# Async-inference RobotClient config — runs on the LAPTOP connected to the robot.
+# Pairs with a PolicyServer started on the GPU box:
+#   CUDA_VISIBLE_DEVICES=1 uv run python -m lerobot.async_inference.policy_server --host=0.0.0.0 --port=8081
+#
+# Usage (on the laptop):
+#   uv run python -m lerobot.async_inference.robot_client --config_path=piperx_rollout_client.toml
+
+# --- Network ---
+server_address = "<SERVER_IP>:8081"  # TODO: fill in reachable IP of the GPU box (LAN or Tailscale); 8080 was already taken on the server host, using 8081
+
+# --- Policy ---
+policy_type = "pi05"
+pretrained_name_or_path = "/home/dzatyagov/projects/lerobot/outputs/train/pi05_rabc/040000/pretrained_model"
+policy_device = "cuda"   # device on the SERVER side
+client_device = "cpu"    # device on the CLIENT side (this laptop) for post-receive action handling
+
+# --- Task ---
+task = "Pick up a round peg and put it into the blue bin"  # TODO: swap for the task you want to test
+
+# --- Chunking / streaming behavior ---
+actions_per_chunk = 50
+chunk_size_threshold = 0.5
+aggregate_fn_name = "weighted_average"
+fps = 30
+
+# --- Debug ---
+debug_visualize_queue_size = true
+
+# --- Robot (same [robot] section as your teleop.toml, minus [teleop]) ---
+[robot]
+type = "piper_follower"
+can_port = "can0"
+id = "my_piperx"
+ee_bounds_min = [-0.6, -0.3, 0.005]
+ee_bounds_max = [0.6, 0.4, 0.6]
+
+[robot.cameras.wrist]
+type = "opencv"
+index_or_path = 0
+width = 640
+height = 480
+fps = 30
+
+[robot.cameras.top]
+type = "opencv"
+index_or_path = 2
+width = 640
+height = 480
+fps = 30
